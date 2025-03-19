@@ -6,14 +6,17 @@ import platform
 import time
 import base64
 import json
+import requests
 from argparse import ArgumentParser
 from datetime import datetime
 from fractions import Fraction
 from pathlib import Path
+from dotenv import load_dotenv
 
 import gradio as gr
 import torch
 import torchaudio
+from google.cloud import translate_v2 as translate
 
 from mmaudio.eval_utils import (ModelConfig, VideoInfo, all_model_cfg, generate, load_image,
                                 load_video, make_video, setup_eval_logging)
@@ -53,6 +56,46 @@ setup_eval_logging()
 cancel_batch_video = False
 cancel_batch_image = False
 cancel_batch_text = False
+
+# 환경 변수 로드
+load_dotenv()
+
+# Google Translate API 설정
+GOOGLE_TRANSLATE_API_KEY = os.getenv('GOOGLE_TRANSLATE_API_KEY')
+
+
+def translate_to_english(text: str) -> str:
+    """
+    한글 텍스트를 영어로 번역합니다.
+    번역에 실패하면 원본 텍스트를 반환합니다.
+    """
+    if not text or not GOOGLE_TRANSLATE_API_KEY:
+        return text
+
+    try:
+        # 텍스트가 한글을 포함하는지 확인
+        if any(ord('가') <= ord(char) <= ord('힣') for char in text):
+            url = "https://translation.googleapis.com/language/translate/v2"
+            params = {
+                'key': GOOGLE_TRANSLATE_API_KEY,
+                'q': text,
+                'source': 'ko',
+                'target': 'en'
+            }
+
+            response = requests.post(url, params=params)
+            if response.status_code == 200:
+                translated = response.json(
+                )['data']['translations'][0]['translatedText']
+                log.info(f'번역 완료: {text} -> {translated}')
+                return translated
+            else:
+                log.warning(f'번역 API 오류: {response.status_code}')
+                return text
+        return text
+    except Exception as e:
+        log.warning(f'번역 실패: {str(e)}')
+        return text
 
 
 def get_model() -> tuple[MMAudio, FeaturesUtils, SequenceConfig]:
@@ -348,20 +391,26 @@ def image_to_audio_single(image, prompt: str, negative_prompt: str, seed: int, n
 
 
 def video_to_audio_single_wrapper(video, prompt, negative_prompt, seed, num_steps, cfg_strength, duration, generations, save_params):
-    results = video_to_audio_single(
-        video, prompt, negative_prompt, seed, num_steps, cfg_strength, duration, generations, save_params)
+    translated_prompt = translate_to_english(prompt)
+    translated_negative_prompt = translate_to_english(negative_prompt)
+    results = video_to_audio_single(video, translated_prompt, translated_negative_prompt,
+                                    seed, num_steps, cfg_strength, duration, generations, save_params)
     return results, "Done"
 
 
 def text_to_audio_single_wrapper(prompt, negative_prompt, seed, num_steps, cfg_strength, duration, generations, save_params):
-    html_output, _ = text_to_audio_single(prompt, negative_prompt, seed, num_steps, cfg_strength,
-                                          duration, generations, output_folder=output_dir, save_params=save_params)
+    translated_prompt = translate_to_english(prompt)
+    translated_negative_prompt = translate_to_english(negative_prompt)
+    html_output, _ = text_to_audio_single(translated_prompt, translated_negative_prompt, seed, num_steps,
+                                          cfg_strength, duration, generations, output_folder=output_dir, save_params=save_params)
     return html_output, "Done"
 
 
 def image_to_audio_single_wrapper(image, prompt, negative_prompt, seed, num_steps, cfg_strength, duration, generations, save_params):
-    results, _ = image_to_audio_single(
-        image, prompt, negative_prompt, seed, num_steps, cfg_strength, duration, generations, save_params)
+    translated_prompt = translate_to_english(prompt)
+    translated_negative_prompt = translate_to_english(negative_prompt)
+    results, _ = image_to_audio_single(image, translated_prompt, translated_negative_prompt,
+                                       seed, num_steps, cfg_strength, duration, generations, save_params)
     return results, "Done"
 
 # --------------------------
@@ -522,6 +571,8 @@ def batch_image_to_audio(image_path: str, prompt: str, negative_prompt: str, see
 def batch_video_processing_callback(batch_in_folder: str, batch_out_folder: str, skip_existing: bool,
                                     prompt: str, negative_prompt: str, seed: int, num_steps: int,
                                     cfg_strength: float, duration: float, generations: int, save_params: bool):
+    translated_prompt = translate_to_english(prompt)
+    translated_negative_prompt = translate_to_english(negative_prompt)
     global cancel_batch_video
     cancel_batch_video = False
     in_path = Path(batch_in_folder)
@@ -544,12 +595,12 @@ def batch_video_processing_callback(batch_in_folder: str, batch_out_folder: str,
             yield "\n".join(log_lines)
             return
         txt_file = f.with_suffix(".txt")
-        effective_prompt = prompt
+        effective_prompt = translated_prompt
         if txt_file.exists():
             with open(txt_file, 'r') as tf:
                 content = tf.read().strip()
             if content:
-                effective_prompt = content
+                effective_prompt = translate_to_english(content)
         dest = out_path / f.name
         if skip_existing and dest.exists():
             log_lines.append(f"Skipping {f.name} (already exists).")
@@ -557,7 +608,7 @@ def batch_video_processing_callback(batch_in_folder: str, batch_out_folder: str,
             yield "\n".join(log_lines)
             continue
         try:
-            results = batch_video_to_audio(str(f), effective_prompt, negative_prompt,
+            results = batch_video_to_audio(str(f), effective_prompt, translated_negative_prompt,
                                            seed, num_steps, cfg_strength, duration, generations, out_path, save_params)
             processed_global += len(results)
             elapsed_global = time.time() - start_time_global
@@ -576,6 +627,8 @@ def batch_video_processing_callback(batch_in_folder: str, batch_out_folder: str,
 def batch_image_processing_callback(batch_in_folder: str, batch_out_folder: str, skip_existing: bool,
                                     prompt: str, negative_prompt: str, seed: int, num_steps: int,
                                     cfg_strength: float, duration: float, generations: int, save_params: bool):
+    translated_prompt = translate_to_english(prompt)
+    translated_negative_prompt = translate_to_english(negative_prompt)
     global cancel_batch_image
     cancel_batch_image = False
     in_path = Path(batch_in_folder)
@@ -598,12 +651,12 @@ def batch_image_processing_callback(batch_in_folder: str, batch_out_folder: str,
             yield "\n".join(log_lines)
             return
         txt_file = f.with_suffix(".txt")
-        effective_prompt = prompt
+        effective_prompt = translated_prompt
         if txt_file.exists():
             with open(txt_file, 'r') as tf:
                 content = tf.read().strip()
             if content:
-                effective_prompt = content
+                effective_prompt = translate_to_english(content)
         base_name = Path(f).stem
         if skip_existing:
             out_filename = base_name + \
@@ -615,7 +668,7 @@ def batch_image_processing_callback(batch_in_folder: str, batch_out_folder: str,
                 yield "\n".join(log_lines)
                 continue
         try:
-            results = batch_image_to_audio(str(f), effective_prompt, negative_prompt,
+            results = batch_image_to_audio(str(f), effective_prompt, translated_negative_prompt,
                                            seed, num_steps, cfg_strength, duration, generations, out_path, save_params)
             processed_global += len(results)
             elapsed_global = time.time() - start_time_global
@@ -633,6 +686,7 @@ def batch_image_processing_callback(batch_in_folder: str, batch_out_folder: str,
 
 def batch_text_processing_callback(batch_prompts: str, negative_prompt: str, seed: int, num_steps: int,
                                    cfg_strength: float, duration: float, generations: int, save_params: bool, batch_out_folder: str):
+    translated_negative_prompt = translate_to_english(negative_prompt)
     global cancel_batch_text
     cancel_batch_text = False
     lines = batch_prompts.splitlines()
@@ -656,7 +710,8 @@ def batch_text_processing_callback(batch_prompts: str, negative_prompt: str, see
             yield "\n".join(log_lines)
             continue
         try:
-            _ = text_to_audio_single(prompt_line, negative_prompt, seed, num_steps, cfg_strength, duration,
+            translated_prompt = translate_to_english(prompt_line)
+            _ = text_to_audio_single(translated_prompt, translated_negative_prompt, seed, num_steps, cfg_strength, duration,
                                      generations, output_folder=batch_out_folder_path, save_params=save_params)
             processed_global += generations
             elapsed_global = time.time() - start_time
