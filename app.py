@@ -17,8 +17,6 @@ import gradio as gr
 import torch
 import torchaudio
 from google.cloud import translate_v2 as translate
-from google import genai
-from google.genai import types
 
 from mmaudio.eval_utils import (ModelConfig, VideoInfo, all_model_cfg, generate, load_image,
                                 load_video, make_video, setup_eval_logging)
@@ -64,9 +62,6 @@ load_dotenv()
 
 # Google Translate API 설정
 GOOGLE_TRANSLATE_API_KEY = os.getenv('GOOGLE_TRANSLATE_API_KEY')
-
-# Gemini API 설정
-GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 
 
 def translate_to_english(text: str) -> str:
@@ -395,106 +390,19 @@ def image_to_audio_single(image, prompt: str, negative_prompt: str, seed: int, n
 # --- Wrapper functions for single processing ---
 
 
-def generate_prompt_from_video(video_path: str) -> str:
-    """
-    Gemini API를 사용하여 비디오로부터 프롬프트를 자동 생성합니다.
-    """
-    if not GEMINI_API_KEY:
-        return ""
-
-    try:
-        client = genai.Client(api_key=GEMINI_API_KEY)
-
-        # 비디오 파일을 Gemini API에 직접 업로드
-        files = [client.files.upload(file=video_path)]
-
-        model = "gemini-2.0-flash-exp-image-generation"
-        contents = [
-            types.Content(
-                role="user",
-                parts=[types.Part.from_uri(
-                    file_uri=files[0].uri,
-                    mime_type="video/mp4",
-                )],
-            ),
-            types.Content(
-                role="user",
-                parts=[types.Part.from_text(text="""analyze attached video. i will generate audio for this video via text to audio model.
-describe audio for this video in a single sentence. so write me a great sentence to
-generate a great audio matching to this video. use passive sentence.""")],
-            ),
-        ]
-
-        generate_content_config = types.GenerateContentConfig(
-            temperature=1,
-            top_p=0.95,
-            top_k=40,
-            max_output_tokens=8192,
-            safety_settings=[
-                types.SafetySetting(
-                    category="HARM_CATEGORY_CIVIC_INTEGRITY",
-                    threshold="OFF",
-                ),
-            ],
-        )
-
-        response = client.models.generate_content(
-            model=model,
-            contents=contents,
-            config=generate_content_config,
-        )
-
-        if response.candidates and response.candidates[0].content and response.candidates[0].content.parts:
-            return response.candidates[0].content.parts[0].text
-        return ""
-
-    except Exception as e:
-        log.warning(f'프롬프트 생성 실패: {str(e)}')
-        return ""
-
-
-def video_upload_and_generate_prompt(video):
-    """
-    비디오가 업로드되면 자동으로 프롬프트를 생성합니다.
-    """
-    if not video:
-        return None, gr.update(value="", interactive=True)
-
-    try:
-        # 프롬프트 생성 중임을 표시
-        yield video, gr.update(value="프롬프트 생성 중...", interactive=False)
-
-        prompt = generate_prompt_from_video(video)
-        if prompt:
-            yield video, gr.update(value=prompt, interactive=True)
-        else:
-            yield video, gr.update(value="", interactive=True)
-    except Exception as e:
-        log.error(f"프롬프트 생성 중 오류 발생: {str(e)}")
-        yield video, gr.update(value="", interactive=True)
-
-
 def video_to_audio_single_wrapper(video, prompt, negative_prompt, seed, num_steps, cfg_strength, duration, generations, save_params):
-    try:
-        # 비디오가 업로드되고 프롬프트가 비어있는 경우 자동 생성
-        if video and not prompt and GEMINI_API_KEY:
-            generated_prompt = generate_prompt_from_video(video)
-            if generated_prompt:
-                prompt = generated_prompt
-
-        results = video_to_audio_single(video, prompt, negative_prompt, seed, num_steps,
-                                        cfg_strength, duration, generations, save_params)
-        return results, "변환이 완료되었습니다."
-    except Exception as e:
-        log.error(f"Error in video_to_audio_single_wrapper: {str(e)}")
-        raise gr.Error(str(e))
+    translated_prompt = translate_to_english(prompt)
+    translated_negative_prompt = translate_to_english(negative_prompt)
+    results = video_to_audio_single(video, translated_prompt, translated_negative_prompt,
+                                    seed, num_steps, cfg_strength, duration, generations, save_params)
+    return results, "Done"
 
 
-def text_to_audio_single_wrapper(prompt, negative_prompt, seed, num_steps, cfg_strength, duration, generations, output_folder: Path, save_params: bool = True):
+def text_to_audio_single_wrapper(prompt, negative_prompt, seed, num_steps, cfg_strength, duration, generations, save_params):
     translated_prompt = translate_to_english(prompt)
     translated_negative_prompt = translate_to_english(negative_prompt)
     html_output, _ = text_to_audio_single(translated_prompt, translated_negative_prompt, seed, num_steps,
-                                          cfg_strength, duration, generations, output_folder, save_params)
+                                          cfg_strength, duration, generations, output_folder=output_dir, save_params=save_params)
     return html_output, "Done"
 
 
@@ -1010,6 +918,7 @@ def load_config(config_name):
         return (
             "", "music", -
                 1, 1, 50, 4.5, 5, True, "", str(output_dir), True, True,
+            "", "", -1, 1, 50, 4.5, 5, True, "", str(output_dir), True,
             "", "", -1, 1, 50, 4.5, 5, True, "", str(output_dir), True, True
         )
     with open(config_path, "r") as f:
@@ -1090,8 +999,7 @@ with gr.Blocks() as demo:
                         clear_btn_video = gr.Button("초기화")
                         submit_btn_video = gr.Button(
                             "변환 시작", variant="primary")
-                    prompt_video = gr.Textbox(
-                        label="프롬프트(한글가능)", interactive=True)
+                    prompt_video = gr.Textbox(label="프롬프트(한글가능)")
                     neg_prompt_video = gr.Textbox(
                         label="네거티브 프롬프트", value="음악")
                     with gr.Row():
@@ -1132,26 +1040,20 @@ with gr.Blocks() as demo:
                                            seed_slider_video, steps_slider_video,
                                            guidance_slider_video, duration_slider_video, gen_slider_video, save_params_video])
             submit_btn_video.click(fn=lambda: ([], "Processing started..."),
-                                   outputs=[output_videos, status_video])                .then(video_to_audio_single_wrapper,
-                                                                                               inputs=[video_input, prompt_video, neg_prompt_video, seed_slider_video, steps_slider_video,
-                                                                                                       guidance_slider_video, duration_slider_video, gen_slider_video, save_params_video],
-                                                                                               outputs=[output_videos, status_video])
+                                   outputs=[output_videos, status_video])\
+                .then(video_to_audio_single_wrapper,
+                      inputs=[video_input, prompt_video, neg_prompt_video, seed_slider_video, steps_slider_video,
+                              guidance_slider_video, duration_slider_video, gen_slider_video, save_params_video],
+                      outputs=[output_videos, status_video])
             open_outputs_btn_video.click(fn=open_outputs_folder, outputs=[])
-            batch_start_video.click(
-                fn=lambda: "Processing started...", outputs=batch_status_video)                .then(batch_video_processing_callback,
-                                                                                                     inputs=[batch_input_videos, batch_output_videos, skip_checkbox_video,
-                                                                                                             prompt_video, neg_prompt_video, seed_slider_video, steps_slider_video,
-                                                                                                             guidance_slider_video, duration_slider_video, gen_slider_video, save_params_video],
-                                                                                                     outputs=batch_status_video)
+            batch_start_video.click(fn=lambda: "Processing started...", outputs=batch_status_video)\
+                .then(batch_video_processing_callback,
+                      inputs=[batch_input_videos, batch_output_videos, skip_checkbox_video,
+                              prompt_video, neg_prompt_video, seed_slider_video, steps_slider_video,
+                              guidance_slider_video, duration_slider_video, gen_slider_video, save_params_video],
+                      outputs=batch_status_video)
             batch_cancel_video.click(
                 fn=cancel_batch_video_func, outputs=batch_status_video)
-
-            # 비디오 업로드 이벤트 연결
-            video_input.upload(
-                fn=video_upload_and_generate_prompt,
-                inputs=[video_input],
-                outputs=[video_input, prompt_video]
-            )
 
         # ---------------- Text-to-Audio Tab ----------------
         with gr.TabItem("텍스트-오디오 변환"):
@@ -1197,16 +1099,17 @@ with gr.Blocks() as demo:
                                           seed_slider_text, steps_slider_text,
                                           guidance_slider_text, duration_slider_text, gen_slider_text, save_params_text])
             submit_btn_text.click(fn=lambda: ("", "Processing started..."),
-                                  outputs=[output_audios_html, status_text])                .then(text_to_audio_single_wrapper,
-                                                                                                  inputs=[prompt_text, neg_prompt_text, seed_slider_text, steps_slider_text,
-                                                                                                          guidance_slider_text, duration_slider_text, gen_slider_text, save_params_text],
-                                                                                                  outputs=[output_audios_html, status_text])
+                                  outputs=[output_audios_html, status_text])\
+                .then(text_to_audio_single_wrapper,
+                      inputs=[prompt_text, neg_prompt_text, seed_slider_text, steps_slider_text,
+                              guidance_slider_text, duration_slider_text, gen_slider_text, save_params_text],
+                      outputs=[output_audios_html, status_text])
             open_outputs_btn_text.click(fn=open_outputs_folder, outputs=[])
-            batch_start_text.click(
-                fn=lambda: "Processing started...", outputs=batch_status_text)                .then(batch_text_processing_callback,
-                                                                                                    inputs=[batch_prompts, neg_prompt_text, seed_slider_text, steps_slider_text,
-                                                                                                            guidance_slider_text, duration_slider_text, gen_slider_text, save_params_text, batch_output_text],
-                                                                                                    outputs=batch_status_text)
+            batch_start_text.click(fn=lambda: "Processing started...", outputs=batch_status_text)\
+                .then(batch_text_processing_callback,
+                      inputs=[batch_prompts, neg_prompt_text, seed_slider_text, steps_slider_text,
+                              guidance_slider_text, duration_slider_text, gen_slider_text, save_params_text, batch_output_text],
+                      outputs=batch_status_text)
             batch_cancel_text.click(
                 fn=cancel_batch_text_func, outputs=batch_status_text)
 
@@ -1260,17 +1163,18 @@ with gr.Blocks() as demo:
                                            seed_slider_image, steps_slider_image,
                                            guidance_slider_image, duration_slider_image, gen_slider_image, save_params_image])
             submit_btn_image.click(fn=lambda: ([], "Processing started..."),
-                                   outputs=[output_videos_image, status_image])                .then(image_to_audio_single_wrapper,
-                                                                                                     inputs=[image_input, prompt_image, neg_prompt_image, seed_slider_image, steps_slider_image,
-                                                                                                             guidance_slider_image, duration_slider_image, gen_slider_image, save_params_image],
-                                                                                                     outputs=[output_videos_image, status_image])
+                                   outputs=[output_videos_image, status_image])\
+                .then(image_to_audio_single_wrapper,
+                      inputs=[image_input, prompt_image, neg_prompt_image, seed_slider_image, steps_slider_image,
+                              guidance_slider_image, duration_slider_image, gen_slider_image, save_params_image],
+                      outputs=[output_videos_image, status_image])
             open_outputs_btn_image.click(fn=open_outputs_folder, outputs=[])
-            batch_start_image.click(
-                fn=lambda: "Processing started...", outputs=batch_status_image)                .then(batch_image_processing_callback,
-                                                                                                     inputs=[batch_input_images, batch_output_images, skip_checkbox_image,
-                                                                                                             prompt_image, neg_prompt_image, seed_slider_image, steps_slider_image,
-                                                                                                             guidance_slider_image, duration_slider_image, gen_slider_image, save_params_image],
-                                                                                                     outputs=batch_status_image)
+            batch_start_image.click(fn=lambda: "Processing started...", outputs=batch_status_image)\
+                .then(batch_image_processing_callback,
+                      inputs=[batch_input_images, batch_output_images, skip_checkbox_image,
+                              prompt_image, neg_prompt_image, seed_slider_image, steps_slider_image,
+                              guidance_slider_image, duration_slider_image, gen_slider_image, save_params_image],
+                      outputs=batch_status_image)
             batch_cancel_image.click(
                 fn=cancel_batch_image_func, outputs=batch_status_image)
 
