@@ -733,7 +733,7 @@ if not default_config_path.exists():
     default_config = {
         "video": {
             "prompt": "",
-            "neg_prompt": "음악",
+            "neg_prompt": "music",
             "seed": -1,
             "num_steps": 50,
             "guidance": 4.5,
@@ -948,9 +948,9 @@ with gr.Blocks() as demo:
                         clear_btn_video = gr.Button("초기화")
                         submit_btn_video = gr.Button(
                             "변환 시작", variant="primary")
-                    prompt_video = gr.Textbox(label="프롬프트")
+                    prompt_video = gr.Textbox(label="프롬프트(영문)")
                     neg_prompt_video = gr.Textbox(
-                        label="네거티브 프롬프트", value="음악")
+                        label="네거티브 프롬프트(영문)", value="music")
                     with gr.Row():
                         seed_slider_video = gr.Slider(
                             label="시드 값 (-1: 랜덤)", minimum=-1, maximum=2147483647, step=1, value=-1, interactive=True)
@@ -1011,8 +1011,8 @@ with gr.Blocks() as demo:
                     with gr.Row():
                         clear_btn_text = gr.Button("초기화")
                         submit_btn_text = gr.Button("변환 시작", variant="primary")
-                    prompt_text = gr.Textbox(label="프롬프트")
-                    neg_prompt_text = gr.Textbox(label="네거티브 프롬프트")
+                    prompt_text = gr.Textbox(label="프롬프트(영문)")
+                    neg_prompt_text = gr.Textbox(label="네거티브 프롬프트(영문)")
                     with gr.Row():
                         seed_slider_text = gr.Slider(
                             label="시드 값 (-1: 랜덤)", minimum=-1, maximum=2147483647, step=1, value=-1, interactive=True)
@@ -1072,8 +1072,8 @@ with gr.Blocks() as demo:
                         clear_btn_image = gr.Button("초기화")
                         submit_btn_image = gr.Button(
                             "변환 시작", variant="primary")
-                    prompt_image = gr.Textbox(label="프롬프트")
-                    neg_prompt_image = gr.Textbox(label="네거티브 프롬프트")
+                    prompt_image = gr.Textbox(label="프롬프트(영문)")
+                    neg_prompt_image = gr.Textbox(label="네거티브 프롬프트(영문)")
                     with gr.Row():
                         seed_slider_image = gr.Slider(
                             label="시드 값 (-1: 랜덤)", minimum=-1, maximum=2147483647, step=1, value=-1, interactive=True)
